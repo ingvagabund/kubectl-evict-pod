@@ -917,10 +917,11 @@ func (r *Request) request(ctx context.Context, fn func(*http.Request, *http.Resp
 // processing.
 //
 // Error type:
-//  * If the server responds with a status: *errors.StatusError or *errors.UnexpectedObjectError
-//  * http.Client.Do errors are returned directly.
+//   - If the server responds with a status: *errors.StatusError or *errors.UnexpectedObjectError
+//   - http.Client.Do errors are returned directly.
 func (r *Request) Do(ctx context.Context) Result {
 	var result Result
+	fmt.Printf("Request.Do\n")
 	err := r.request(ctx, func(req *http.Request, resp *http.Response) {
 		result = r.transformResponse(resp, req)
 	})
@@ -955,8 +956,11 @@ func (r *Request) DoRaw(ctx context.Context) ([]byte, error) {
 // transformResponse converts an API response into a structured API object
 func (r *Request) transformResponse(resp *http.Response, req *http.Request) Result {
 	var body []byte
+	fmt.Printf("Request.transformResponse\n")
+	fmt.Printf("Request.resp.Body: %#v\n", resp.Body)
 	if resp.Body != nil {
 		data, err := ioutil.ReadAll(resp.Body)
+		fmt.Printf("Request.resp.Body.data: %v\n", string(data))
 		switch err.(type) {
 		case nil:
 			body = data
@@ -1013,7 +1017,7 @@ func (r *Request) transformResponse(resp *http.Response, req *http.Request) Resu
 			}
 		}
 	}
-
+	fmt.Printf("Request.transformResponse: still here\n")
 	switch {
 	case resp.StatusCode == http.StatusSwitchingProtocols:
 		// no-op, we've been upgraded
@@ -1021,7 +1025,9 @@ func (r *Request) transformResponse(resp *http.Response, req *http.Request) Resu
 		// calculate an unstructured error from the response which the Result object may use if the caller
 		// did not return a structured error.
 		retryAfter, _ := retryAfterSeconds(resp)
+		fmt.Printf("Request.transformResponse: calculate an unstructured error from\n")
 		err := r.newUnstructuredResponseError(body, isTextResponse(resp), resp.StatusCode, req.Method, retryAfter)
+		fmt.Printf("Request.transformResponse.err: %v\n", err)
 		return Result{
 			body:        body,
 			contentType: contentType,
@@ -1085,15 +1091,15 @@ const maxUnstructuredResponseTextBytes = 2048
 // unexpected responses. The rough structure is:
 //
 // 1. Assume the server sends you something sane - JSON + well defined error objects + proper codes
-//    - this is the happy path
-//    - when you get this output, trust what the server sends
-// 2. Guard against empty fields / bodies in received JSON and attempt to cull sufficient info from them to
-//    generate a reasonable facsimile of the original failure.
-//    - Be sure to use a distinct error type or flag that allows a client to distinguish between this and error 1 above
-// 3. Handle true disconnect failures / completely malformed data by moving up to a more generic client error
-// 4. Distinguish between various connection failures like SSL certificates, timeouts, proxy errors, unexpected
-//    initial contact, the presence of mismatched body contents from posted content types
-//    - Give these a separate distinct error type and capture as much as possible of the original message
+//   - this is the happy path
+//   - when you get this output, trust what the server sends
+//     2. Guard against empty fields / bodies in received JSON and attempt to cull sufficient info from them to
+//     generate a reasonable facsimile of the original failure.
+//   - Be sure to use a distinct error type or flag that allows a client to distinguish between this and error 1 above
+//     3. Handle true disconnect failures / completely malformed data by moving up to a more generic client error
+//     4. Distinguish between various connection failures like SSL certificates, timeouts, proxy errors, unexpected
+//     initial contact, the presence of mismatched body contents from posted content types
+//   - Give these a separate distinct error type and capture as much as possible of the original message
 //
 // TODO: introduce transformation of generic http.Client.Do() errors that separates 4.
 func (r *Request) transformUnstructuredResponseError(resp *http.Response, req *http.Request, body []byte) error {
@@ -1122,7 +1128,7 @@ func (r *Request) newUnstructuredResponseError(body []byte, isTextResponse bool,
 		groupResource.Group = r.c.content.GroupVersion.Group
 		groupResource.Resource = r.resource
 	}
-	return errors.NewGenericServerResponse(
+	e := errors.NewGenericServerResponse(
 		statusCode,
 		method,
 		groupResource,
@@ -1131,6 +1137,8 @@ func (r *Request) newUnstructuredResponseError(body []byte, isTextResponse bool,
 		retryAfter,
 		true,
 	)
+	fmt.Printf("e: %#v\n", e)
+	return e
 }
 
 // isTextResponse returns true if the response appears to be a textual media type.
@@ -1256,7 +1264,7 @@ func (r Result) Error() error {
 	if r.err == nil || !errors.IsUnexpectedServerError(r.err) || len(r.body) == 0 || r.decoder == nil {
 		return r.err
 	}
-
+	fmt.Printf("Error(): r.err: %v\n", r.err)
 	// attempt to convert the body into a Status object
 	// to be backwards compatible with old servers that do not return a version, default to "v1"
 	out, _, err := r.decoder.Decode(r.body, &schema.GroupVersionKind{Version: "v1"}, nil)
@@ -1268,6 +1276,7 @@ func (r Result) Error() error {
 	case *metav1.Status:
 		// because we default the kind, we *must* check for StatusFailure
 		if t.Status == metav1.StatusFailure {
+			fmt.Printf("Error(): errors.FromObject(t): %v\n", errors.FromObject(t))
 			return errors.FromObject(t)
 		}
 	}
